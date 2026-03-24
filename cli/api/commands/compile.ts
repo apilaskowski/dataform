@@ -1,9 +1,9 @@
+import { ChildProcess, exec, fork } from "child_process";
 import * as fs from "fs-extra";
 import * as path from "path";
 import * as tmp from "tmp";
 import { promisify } from "util";
 
-import { ChildProcess, exec, fork } from "child_process";
 import { MISSING_CORE_VERSION_ERROR } from "df/cli/api/commands/install";
 import { readDataformCoreVersionFromWorkflowSettings } from "df/cli/api/utils";
 import { coerceAsError } from "df/common/errors/errors";
@@ -11,6 +11,10 @@ import { decode64 } from "df/common/protos";
 import { dataform } from "df/protos/ts";
 
 export class CompilationTimeoutError extends Error {}
+
+function print(text: string) {
+  process.stderr.write(text);
+}
 
 export async function compile(
   compileConfig: dataform.ICompileConfig = {}
@@ -41,8 +45,19 @@ export async function compile(
       }
     });
 
+    if (compileConfig.verbose) {
+      print(`Using isolated environment for @dataform/core@${workflowSettingsDataformCoreVersion}\n`);
+      print(`Copying project to temporary directory: ${temporaryProjectPath}\n`);
+    }
+    const copyStartTime = performance.now();
     fs.copySync(resolvedProjectPath, temporaryProjectPath);
+    if (compileConfig.verbose) {
+      print(`Project copy completed in ${performance.now() - copyStartTime}ms\n`);
+    }
 
+    if (compileConfig.verbose) {
+      print(`Generating temporary package.json\n`);
+    }
     fs.writeFileSync(
       path.join(temporaryProjectPath, "package.json"),
       `{
@@ -52,9 +67,19 @@ export async function compile(
 }`
     );
 
-    await promisify(exec)("npm i --ignore-scripts", {
+    const npmCommand = `npm i --ignore-scripts${compileConfig.verbose ? " --loglevel=http" : ""}`;
+    if (compileConfig.verbose) {
+      print(`Running '${npmCommand}' in temporary directory...\n`);
+    }
+    const npmStartTime = performance.now();
+    const { stdout, stderr } = await promisify(exec)(npmCommand, {
       cwd: temporaryProjectPath
     });
+    
+    if (compileConfig.verbose) {
+      print(`NPM HTTP Logs:\n${stderr}\n`);
+      print(`NPM install completed in ${performance.now() - npmStartTime}ms\n`);
+    }
 
     compileConfig.projectDir = temporaryProjectPath;
   }
@@ -77,7 +102,7 @@ export class CompileChildProcess {
     // if it exists, otherwise run the bazel compile loader target.
     const findForkScript = () => {
       try {
-        const workerBundlePath = require.resolve("./worker_bundle");
+        const workerBundlePath = require.resolve("./worker_bundle.js");
         return workerBundlePath;
       } catch (e) {
         return require.resolve("../../vm/compile_loader");

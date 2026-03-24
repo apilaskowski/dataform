@@ -1,9 +1,10 @@
+import * as chokidar from "chokidar";
 import * as fs from "fs";
 import * as glob from "glob";
+import parseDuration from "parse-duration";
 import * as path from "path";
 import yargs from "yargs";
 
-import * as chokidar from "chokidar";
 import { build, compile, credentials, init, install, run, test } from "df/cli/api";
 import { CREDENTIALS_FILENAME } from "df/cli/api/commands/credentials";
 import { BigQueryDbAdapter } from "df/cli/api/dbadapters/bigquery";
@@ -32,7 +33,6 @@ import { createYargsCli, INamedOption } from "df/cli/yargswrapper";
 import { targetAsReadableString } from "df/core/targets";
 import { dataform } from "df/protos/ts";
 import { formatFile } from "df/sqlx/format";
-import parseDuration from "parse-duration";
 
 const RECOMPILE_DELAY = 500;
 
@@ -213,6 +213,7 @@ const testConnectionOptionName = "test-connection";
 
 const watchOptionName = "watch";
 
+const verboseOptionName = "verbose";
 const dryRunOptionName = "dry-run";
 const runTestsOptionName = "run-tests";
 const checkOptionName = "check";
@@ -375,6 +376,19 @@ export function runCli() {
           jsonOutputOption,
           timeoutOption,
           quietCompileOption,
+          {
+            name: verboseOptionName,
+            option: {
+              describe: "Enable verbose compilation output. Example usage: 'dataform compile --verbose'",
+              type: "boolean",
+              default: false
+            },
+            check: (argv: yargs.Arguments) => {
+              if (argv.quiet && argv.verbose) {
+                throw new Error("Arguments --verbose and --quiet are mutually exclusive.");
+              }
+            }
+          },
           ...ProjectConfigOptions.allYargsOptions
         ],
         processFn: async argv => {
@@ -387,7 +401,8 @@ export function runCli() {
             const compiledGraph = await compile({
               projectDir,
               projectConfigOverride: ProjectConfigOptions.constructProjectConfigOverride(argv),
-              timeoutMillis: argv[timeoutOption.name] || undefined
+              timeoutMillis: argv[timeoutOption.name] || undefined,
+              verbose: argv[verboseOptionName] || false
             });
             printCompiledGraph(compiledGraph, argv[jsonOutputOption.name], argv[quietCompileOption.name]);
             if (compiledGraphHasErrors(compiledGraph)) {
@@ -863,6 +878,16 @@ class ProjectConfigOptions {
     }
   };
 
+  public static defaultReservation: INamedOption<yargs.Options> = {
+    name: "default-reservation",
+    option: {
+      describe:
+        "The default BigQuery reservation to use for execution. If unset, the value from " +
+        "workflow_settings.yaml is used. If neither is set, default BigQuery behavior applies.",
+      type: "string"
+    }
+  };
+
   public static allYargsOptions = [
     ProjectConfigOptions.defaultDatabase,
     ProjectConfigOptions.defaultSchema,
@@ -872,7 +897,8 @@ class ProjectConfigOptions {
     ProjectConfigOptions.databaseSuffix,
     ProjectConfigOptions.schemaSuffix,
     ProjectConfigOptions.tablePrefix,
-    ProjectConfigOptions.disableAssertions
+    ProjectConfigOptions.disableAssertions,
+    ProjectConfigOptions.defaultReservation
   ];
 
   public static constructProjectConfigOverride(
@@ -906,6 +932,9 @@ class ProjectConfigOptions {
     }
     if (argv[ProjectConfigOptions.disableAssertions.name]) {
       projectConfigOptions.disableAssertions = argv[ProjectConfigOptions.disableAssertions.name];
+    }
+    if (argv[ProjectConfigOptions.defaultReservation.name]) {
+      projectConfigOptions.defaultReservation = argv[ProjectConfigOptions.defaultReservation.name];
     }
     return projectConfigOptions;
   }
